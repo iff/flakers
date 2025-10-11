@@ -187,26 +187,30 @@ pub fn parse_header(input: &str) -> IResult<&str, ()> {
     Ok((input, ()))
 }
 
+fn parse_entry_with_tag<'a, F, T>(
+    tag_str: &str,
+    mut parse_info: F,
+    make_entry: fn(&'a str, T) -> Entry<'a>,
+) -> impl FnMut(&'a str) -> IResult<&'a str, Entry<'a>>
+where
+    F: nom::Parser<&'a str, Output = T, Error = nom::error::Error<&'a str>>,
+{
+    move |input| {
+        let (input, _) = tag(tag_str)(input)?;
+        let (input, package) = take_until("':")(input)?;
+        let (input, _) = tag("':")(input)?;
+        let (input, _) = line_ending(input)?;
+        let (input, info) = parse_info.parse(input)?;
+        Ok((input, make_entry(package, info)))
+    }
+}
+
 fn parse_updated(input: &str) -> IResult<&str, Entry<'_>> {
-    let (input, _) = tag("• Updated input '")(input)?;
-    let (input, package) = take_until("':")(input)?;
-    let (input, _) = tag("':")(input)?;
-    let (input, _) = line_ending(input)?;
-
-    let (input, update_info) = UpdateInfo::parse_from(input)?;
-
-    Ok((input, Entry::Updated(package, update_info)))
+    parse_entry_with_tag("• Updated input '", UpdateInfo::parse_from, Entry::Updated)(input)
 }
 
 fn parse_added(input: &str) -> IResult<&str, Entry<'_>> {
-    let (input, _) = tag("• Added input '")(input)?;
-    let (input, package) = take_until("':")(input)?;
-    let (input, _) = tag("':")(input)?;
-    let (input, _) = line_ending(input)?;
-
-    let (input, add_info) = AddInfo::parse_from(input)?;
-
-    Ok((input, Entry::Added(package, add_info)))
+    parse_entry_with_tag("• Added input '", AddInfo::parse_from, Entry::Added)(input)
 }
 
 pub fn parse_entry(input: &str) -> IResult<&str, Entry<'_>> {
