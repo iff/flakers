@@ -1,6 +1,5 @@
 use flakers::{parse_entry, parse_header};
-use nom::Parser;
-use nom::multi::many0;
+use nom::{Parser, multi::many0};
 use std::io::{self, Read};
 
 fn main() {

@@ -2,8 +2,8 @@ use nom::{
     IResult, Parser,
     branch::alt,
     bytes::complete::{tag, take_until, take_while1},
-    character::complete::{char, line_ending, space0, space1},
-    combinator::opt,
+    character::complete::{char, line_ending, not_line_ending, space0, space1},
+    combinator::{opt, verify},
     sequence::delimited,
 };
 
@@ -36,46 +36,30 @@ struct FlakeRef<'a> {
 }
 
 impl<'a> FlakeRef<'a> {
+    /// Parse a flake ref from the input. Query parameters in the url are ignored.
     fn parse_from(input: &'a str) -> IResult<&'a str, Self> {
         let (input, ref_type_str) = take_until(":")(input)?;
         let (input, _) = char(':')(input)?;
         let ref_type = ref_type_str.try_into()?;
 
-        // Parse the path/URL part, stopping at ? if present
-        let (input, path_part) = alt((
-            |i| {
-                let (i, path) = take_until("?")(i)?;
-                Ok((i, path))
-            },
-            |i| Ok(("", i)),
-        ))
-        .parse(input)?;
-
-        // Skip query params if present
+        let (input, repo_and_sha) =
+            verify(take_while1(|c: char| c != '?' && c != '\n'), |s: &str| {
+                s.matches('/').count() == 2
+            })
+            .parse(input)?;
         let (input, _) = opt(|i| {
             let (i, _) = char('?')(i)?;
-            let (i, _) = take_while1(|c: char| c != ' ' && c != '\'' && c != '\n')(i)?;
-            Ok((i, ()))
+            not_line_ending(i)
         })
         .parse(input)?;
 
-        let parts: Vec<&str> = path_part.rsplitn(2, '/').collect();
-        let (commit, repo) = if parts.len() == 2 {
-            (parts[0], parts[1])
-        } else {
-            // TODO not a nom error, parsing is fine, info is missing
-            return Err(nom::Err::Error(nom::error::Error::new(
-                path_part,
-                nom::error::ErrorKind::Fail,
-            )));
-        };
-
+        let parts: Vec<&str> = repo_and_sha.rsplitn(2, '/').collect();
         Ok((
             input,
             FlakeRef {
                 ref_type,
-                repo,
-                commit,
+                repo: parts[1],
+                commit: parts[0],
             },
         ))
     }
