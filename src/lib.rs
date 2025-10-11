@@ -1,10 +1,10 @@
 use nom::{
+    IResult, Parser,
     branch::alt,
     bytes::complete::{tag, take_until, take_while1},
     character::complete::{char, line_ending, space0, space1},
     combinator::opt,
     sequence::delimited,
-    IResult, Parser,
 };
 
 #[derive(Debug, PartialEq)]
@@ -114,7 +114,7 @@ impl<'a> DatedFlakeRef<'a> {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-struct UpdateInfo<'a> {
+pub struct UpdateInfo<'a> {
     from: DatedFlakeRef<'a>,
     to: DatedFlakeRef<'a>,
 }
@@ -152,7 +152,7 @@ impl<'a> UpdateInfo<'a> {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-struct AddInfo<'a>(DatedFlakeRef<'a>);
+pub struct AddInfo<'a>(DatedFlakeRef<'a>);
 
 impl<'a> AddInfo<'a> {
     fn parse_from(input: &'a str) -> IResult<&'a str, Self> {
