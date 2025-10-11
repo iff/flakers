@@ -97,7 +97,6 @@ impl<'a> DatedFlakeRef<'a> {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct UpdateInfo<'a> {
     from: DatedFlakeRef<'a>,
     to: DatedFlakeRef<'a>,
@@ -135,7 +134,6 @@ impl<'a> UpdateInfo<'a> {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct AddInfo<'a>(DatedFlakeRef<'a>);
 
 impl<'a> AddInfo<'a> {
@@ -160,7 +158,6 @@ impl<'a> AddInfo<'a> {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum Entry<'a> {
     Updated(&'a str, UpdateInfo<'a>),
     Added(&'a str, AddInfo<'a>),
