@@ -120,16 +120,12 @@ impl<'a> UpdateInfo<'a> {
             return None;
         }
 
-        match from.ref_type {
-            FlakeRefType::Github => Some(format!(
-                "https://github.com/{}/compare/{}...{}",
-                from.repo, from.commit, to.commit
-            )),
-            FlakeRefType::Gitlab => Some(format!(
-                "https://gitlab.com/{}/compare/{}...{}",
-                from.repo, from.commit, to.commit
-            )),
-        }
+        Some(format!(
+            "{}/compare/{}...{}",
+            from.repo_url(),
+            from.commit,
+            to.commit
+        ))
     }
 }
 
@@ -145,14 +141,10 @@ impl<'a> AddInfo<'a> {
     fn url(&self) -> String {
         let flake_ref = &self.0.flake_ref;
         match flake_ref.ref_type {
-            FlakeRefType::Github => format!(
-                "https://github.com/{}/tree/{}/",
-                flake_ref.repo, flake_ref.commit
-            ),
-            FlakeRefType::Gitlab => format!(
-                "https://gitlab.com/{}/-/tree/{}/",
-                flake_ref.repo, flake_ref.commit
-            ),
+            FlakeRefType::Github => format!("{}/tree/{}/", flake_ref.repo_url(), flake_ref.commit),
+            FlakeRefType::Gitlab => {
+                format!("{}/-/tree/{}/", flake_ref.repo_url(), flake_ref.commit)
+            }
         }
     }
 }
@@ -171,7 +163,7 @@ impl<'a> Entry<'a> {
                 info.from.flake_ref.repo_url(),
                 info.from.flake_ref.sha(),
                 info.to.flake_ref.sha(),
-                info.url().unwrap(),
+                info.url().unwrap(), // TODO: handle None
                 info.from.date,
                 info.to.date,
             )
