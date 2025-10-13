@@ -130,29 +130,22 @@ impl<'a> UpdateInfo<'a> {
 }
 
 #[derive(Debug)]
-pub struct AddInfo<'a>(DatedFlakeRef<'a>);
+pub struct AddInfo<'a>(&'a str);
 
 impl<'a> AddInfo<'a> {
     fn parse_from(input: &'a str) -> IResult<&'a str, Self> {
-        let (input, dated_flake_ref) = DatedFlakeRef::parse_from(input)?;
-        Ok((input, AddInfo(dated_flake_ref)))
-    }
-
-    fn url(&self) -> String {
-        let flake_ref = &self.0.flake_ref;
-        match flake_ref.ref_type {
-            FlakeRefType::Github => format!("{}/tree/{}/", flake_ref.repo_url(), flake_ref.commit),
-            FlakeRefType::Gitlab => {
-                format!("{}/-/tree/{}/", flake_ref.repo_url(), flake_ref.commit)
-            }
-        }
+        let (input, _) = space0(input)?;
+        let (input, _) = tag("follows ")(input)?;
+        let (input, repo) = delimited(tag("'"), take_until("'"), tag("'")).parse(input)?;
+        let (input, _) = line_ending(input)?;
+        Ok((input, AddInfo(repo)))
     }
 }
 
 #[derive(Debug)]
 pub enum Entry<'a> {
     Updated(&'a str, UpdateInfo<'a>),
-    Added(&'a str, AddInfo<'a>),
+    Added(AddInfo<'a>),
 }
 
 impl<'a> Entry<'a> {
@@ -168,14 +161,7 @@ impl<'a> Entry<'a> {
                 info.to.date,
             )
             .to_string(),
-            Entry::Added(name, info) => format!(
-                " - Added input [`{name}`]({}): [`{}`]({}) <sub>({})<sub/>",
-                info.0.flake_ref.repo_url(),
-                info.0.flake_ref.sha(),
-                info.url(),
-                info.0.date,
-            )
-            .to_string(),
+            Entry::Added(repo) => format!(" - Added input {}", repo.0).to_string(),
         }
     }
 }
@@ -187,30 +173,22 @@ pub fn parse_header(input: &str) -> IResult<&str, ()> {
     Ok((input, ()))
 }
 
-fn parse_entry_with_tag<'a, F, T>(
-    tag_str: &str,
-    mut parse_info: F,
-    make_entry: fn(&'a str, T) -> Entry<'a>,
-) -> impl FnMut(&'a str) -> IResult<&'a str, Entry<'a>>
-where
-    F: nom::Parser<&'a str, Output = T, Error = nom::error::Error<&'a str>>,
-{
-    move |input| {
-        let (input, _) = tag(tag_str)(input)?;
-        let (input, package) = take_until("':")(input)?;
-        let (input, _) = tag("':")(input)?;
-        let (input, _) = line_ending(input)?;
-        let (input, info) = parse_info.parse(input)?;
-        Ok((input, make_entry(package, info)))
-    }
-}
-
 fn parse_updated(input: &str) -> IResult<&str, Entry<'_>> {
-    parse_entry_with_tag("• Updated input '", UpdateInfo::parse_from, Entry::Updated)(input)
+    let (input, _) = tag("• Updated input '")(input)?;
+    let (input, package) = take_until("':")(input)?;
+    let (input, _) = tag("':")(input)?;
+    let (input, _) = line_ending(input)?;
+    let (input, info) = UpdateInfo::parse_from.parse(input)?;
+    Ok((input, Entry::Updated(package, info)))
 }
 
 fn parse_added(input: &str) -> IResult<&str, Entry<'_>> {
-    parse_entry_with_tag("• Added input '", AddInfo::parse_from, Entry::Added)(input)
+    let (input, _) = tag("• Added input '")(input)?;
+    let (input, _) = take_until("':")(input)?;
+    let (input, _) = tag("':")(input)?;
+    let (input, _) = line_ending(input)?;
+    let (input, info) = AddInfo::parse_from.parse(input)?;
+    Ok((input, Entry::Added(info)))
 }
 
 pub fn parse_entry(input: &str) -> IResult<&str, Entry<'_>> {
@@ -272,6 +250,8 @@ mod tests {
 • Updated input 'osh-oxy':
     'github:iff/osh-oxy/e79f39e33912abd5b18ca7f5f1e0d0744d4a09e6' (2025-10-02)
   → 'github:iff/osh-oxy/eed066ec93dba6a85b709a31f482ebcdc376ce88' (2025-10-10)
+• Added input 'nihilistic-nvim/rustacean-nvim/gen-luarc/flake-parts':
+    follows 'nihilistic-nvim/rustacean-nvim/flake-parts'
 "#;
 
         let remaining = parse_header(input).expect("Failed to parse header").0;
@@ -279,7 +259,7 @@ mod tests {
             .parse(remaining)
             .expect("Failed to parse entries");
 
-        assert_eq!(entries.len(), 5);
+        assert_eq!(entries.len(), 6);
 
         match &entries[0] {
             Entry::Updated(name, info) => {
@@ -300,6 +280,13 @@ mod tests {
                 assert_eq!(info.to.date, "2025-10-10");
             }
             _ => panic!("Expected Updated entry"),
+        }
+
+        match &entries.last().unwrap() {
+            Entry::Added(repo) => {
+                assert_eq!(repo.0, "nihilistic-nvim/rustacean-nvim/flake-parts");
+            }
+            _ => panic!("Expected Added entry"),
         }
     }
 }
