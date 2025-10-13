@@ -30,6 +30,7 @@ fn main() {
     println!("```");
     println!("\n</p></details>\n");
 
+    // TODO sort and list added first
     for entry in &entries {
         println!("{}", entry.summary());
     }
