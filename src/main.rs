@@ -30,8 +30,12 @@ fn main() {
     println!("```");
     println!("\n</p></details>\n");
 
-    // TODO sort and list added first
-    for entry in &entries {
-        println!("{}", entry.summary());
-    }
+    let _ = entries
+        .iter()
+        .filter(|e| matches!(e, flakers::Entry::Added(_)))
+        .map(|e| println!("{}", e.summary()));
+    let _ = entries
+        .iter()
+        .filter(|e| matches!(e, flakers::Entry::Updated(_, _)))
+        .map(|e| println!("{}", e.summary()));
 }
