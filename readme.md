@@ -16,3 +16,8 @@ example use:
 nix --accept-flake-config flake update --commit-lock-file
 git log -1 --pretty=%B | tail +3 | nix run github:iff/flakers >> "${GITHUB_OUTPUT}"
 ```
+
+example output:
+
+![example output](assets/example_output.png)
+
