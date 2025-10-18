@@ -30,12 +30,12 @@ fn main() {
     println!("```");
     println!("\n</p></details>\n");
 
-    let _ = entries
+    entries
         .iter()
         .filter(|e| matches!(e, flakers::Entry::Added(_)))
-        .map(|e| println!("{}", e.summary()));
-    let _ = entries
+        .for_each(|e| println!("{}", e.summary()));
+    entries
         .iter()
         .filter(|e| matches!(e, flakers::Entry::Updated(_, _)))
-        .map(|e| println!("{}", e.summary()));
+        .for_each(|e| println!("{}", e.summary()));
 }
