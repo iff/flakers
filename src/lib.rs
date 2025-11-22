@@ -77,7 +77,7 @@ impl<'a> FlakeRef<'a> {
 }
 
 #[derive(Debug)]
-struct DatedFlakeRef<'a> {
+pub struct DatedFlakeRef<'a> {
     flake_ref: FlakeRef<'a>,
     date: &'a str,
 }
@@ -130,15 +130,27 @@ impl<'a> UpdateInfo<'a> {
 }
 
 #[derive(Debug)]
-pub struct AddInfo<'a>(&'a str);
+pub enum AddInfo<'a> {
+    Follows(&'a str),
+    New(DatedFlakeRef<'a>),
+}
 
 impl<'a> AddInfo<'a> {
     fn parse_from(input: &'a str) -> IResult<&'a str, Self> {
-        let (input, _) = space0(input)?;
-        let (input, _) = tag("follows ")(input)?;
-        let (input, repo) = delimited(tag("'"), take_until("'"), tag("'")).parse(input)?;
-        let (input, _) = line_ending(input)?;
-        Ok((input, AddInfo(repo)))
+        alt((
+            |i| {
+                let (i, _) = space0(i)?;
+                let (i, _) = tag("follows ")(i)?;
+                let (i, repo) = delimited(tag("'"), take_until("'"), tag("'")).parse(i)?;
+                let (i, _) = line_ending(i)?;
+                Ok((i, AddInfo::Follows(repo)))
+            },
+            |i| {
+                let (i, flake_ref) = DatedFlakeRef::parse_from(i)?;
+                Ok((i, AddInfo::New(flake_ref)))
+            },
+        ))
+        .parse(input)
     }
 }
 
@@ -161,7 +173,15 @@ impl<'a> Entry<'a> {
                 info.to.date,
             )
             .to_string(),
-            Entry::Added(repo) => format!(" - Added input {}", repo.0).to_string(),
+            Entry::Added(info) => match info {
+                AddInfo::Follows(repo) => format!(" - Added input (follows `{}`)", repo),
+                AddInfo::New(dated_ref) => format!(
+                    " - Added input [`{}`]({}) ({})",
+                    dated_ref.flake_ref.sha(),
+                    dated_ref.flake_ref.repo_url(),
+                    dated_ref.date
+                ),
+            },
         }
     }
 }
@@ -244,6 +264,8 @@ mod tests {
 • Updated input 'nihilistic-nvim':
     'github:iff/nihilistic-nvim/be0d9f0311c22ca7ef0d19431d3b2f537a95b764' (2025-10-06)
   → 'github:iff/nihilistic-nvim/9e091eb0f9ccee2ab2711b2226fec9c6af15fb6a' (2025-10-07)
+• Added input 'ltstatus/flake-utils':
+    'github:numtide/flake-utils/11707dc2f618dd54ca8739b309ec4fc024de578b' (2024-11-13)
 • Updated input 'nixpkgs':
     'github:nixos/nixpkgs/dc704e6102e76aad573f63b74c742cd96f8f1e6c' (2025-10-02)
   → 'github:nixos/nixpkgs/2dad7af78a183b6c486702c18af8a9544f298377' (2025-10-09)
@@ -259,7 +281,7 @@ mod tests {
             .parse(remaining)
             .expect("Failed to parse entries");
 
-        assert_eq!(entries.len(), 6);
+        assert_eq!(entries.len(), 7);
 
         match &entries[0] {
             Entry::Updated(name, info) => {
@@ -282,11 +304,24 @@ mod tests {
             _ => panic!("Expected Updated entry"),
         }
 
-        match &entries.last().unwrap() {
-            Entry::Added(repo) => {
-                assert_eq!(repo.0, "nihilistic-nvim/rustacean-nvim/flake-parts");
+        match &entries[3] {
+            Entry::Added(AddInfo::New(info)) => {
+                assert_eq!(info.flake_ref.ref_type, FlakeRefType::Github);
+                assert_eq!(info.flake_ref.repo, "numtide/flake-utils");
+                assert_eq!(
+                    info.flake_ref.commit,
+                    "11707dc2f618dd54ca8739b309ec4fc024de578b"
+                );
+                assert_eq!(info.date, "2024-11-13");
             }
-            _ => panic!("Expected Added entry"),
+            _ => panic!("Expected Added entry with New"),
+        }
+
+        match &entries.last().unwrap() {
+            Entry::Added(AddInfo::Follows(repo)) => {
+                assert_eq!(*repo, "nihilistic-nvim/rustacean-nvim/flake-parts");
+            }
+            _ => panic!("Expected Added entry with Follows"),
         }
     }
 }
