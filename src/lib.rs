@@ -72,7 +72,7 @@ impl<'a> FlakeRef<'a> {
     }
 
     fn sha(&self) -> String {
-        self.commit[..8].to_string()
+        self.commit[..8.min(self.commit.len())].to_string()
     }
 }
 
