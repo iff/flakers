@@ -4,6 +4,7 @@ use std::io::{self, Read};
 
 fn main() {
     let mut input = String::new();
+    #[allow(clippy::expect_used)]
     io::stdin()
         .read_to_string(&mut input)
         .expect("Failed to read stdin");

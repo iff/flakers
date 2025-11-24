@@ -5,3 +5,8 @@ edition = "2024"
 
 [dependencies]
 nom = "8.0.0"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"

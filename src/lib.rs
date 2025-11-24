@@ -54,12 +54,16 @@ impl<'a> FlakeRef<'a> {
         .parse(input)?;
 
         let parts: Vec<&str> = repo_and_sha.rsplitn(2, '/').collect();
+        #[allow(clippy::indexing_slicing)] // rsplitn gives us two parts
+        let repo = parts[1];
+        #[allow(clippy::indexing_slicing)] // rsplitn gives us two parts
+        let commit = parts[0];
         Ok((
             input,
             FlakeRef {
                 ref_type,
-                repo: parts[1],
-                commit: parts[0],
+                repo,
+                commit,
             },
         ))
     }
@@ -163,16 +167,23 @@ pub enum Entry<'a> {
 impl<'a> Entry<'a> {
     pub fn summary(&self) -> String {
         match self {
-            Entry::Updated(name, info) => format!(
-                " - Updated input [`{name}`]({}): [`{}` ➡️ `{}`]({}) <sub>({} to {})<sub/>",
-                info.from.flake_ref.repo_url(),
-                info.from.flake_ref.sha(),
-                info.to.flake_ref.sha(),
-                info.url().unwrap(), // TODO: handle None
-                info.from.date,
-                info.to.date,
-            )
-            .to_string(),
+            Entry::Updated(name, info) => {
+                let url = if let Some(url) = info.url() {
+                    url
+                } else {
+                    String::from("incompatible url")
+                };
+                format!(
+                    " - Updated input [`{name}`]({}): [`{}` ➡️ `{}`]({}) <sub>({} to {})<sub/>",
+                    info.from.flake_ref.repo_url(),
+                    info.from.flake_ref.sha(),
+                    info.to.flake_ref.sha(),
+                    url,
+                    info.from.date,
+                    info.to.date,
+                )
+                .to_string()
+            }
             Entry::Added(info) => match info {
                 AddInfo::Follows(repo) => format!(" - Added input (follows `{}`)", repo),
                 AddInfo::New(dated_ref) => format!(
