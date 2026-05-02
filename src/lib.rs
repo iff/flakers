@@ -162,6 +162,7 @@ impl<'a> AddInfo<'a> {
 pub enum Entry<'a> {
     Updated(&'a str, UpdateInfo<'a>),
     Added(AddInfo<'a>),
+    Removed(&'a str),
 }
 
 impl<'a> Entry<'a> {
@@ -193,6 +194,9 @@ impl<'a> Entry<'a> {
                     dated_ref.date
                 ),
             },
+            Entry::Removed(name) => {
+                format!(" - Removed input `{name}`")
+            }
         }
     }
 }
@@ -222,8 +226,16 @@ fn parse_added(input: &str) -> IResult<&str, Entry<'_>> {
     Ok((input, Entry::Added(info)))
 }
 
+fn parse_removed(input: &str) -> IResult<&str, Entry<'_>> {
+    let (input, _) = tag("• Removed input '")(input)?;
+    let (input, package) = take_until("'")(input)?;
+    let (input, _) = tag("'")(input)?;
+    let (input, _) = line_ending(input)?;
+    Ok((input, Entry::Removed(package)))
+}
+
 pub fn parse_entry(input: &str) -> IResult<&str, Entry<'_>> {
-    alt((parse_updated, parse_added)).parse(input)
+    alt((parse_updated, parse_added, parse_removed)).parse(input)
 }
 
 #[cfg(test)]
@@ -277,6 +289,7 @@ mod tests {
   → 'github:iff/nihilistic-nvim/9e091eb0f9ccee2ab2711b2226fec9c6af15fb6a' (2025-10-07)
 • Added input 'ltstatus/flake-utils':
     'github:numtide/flake-utils/11707dc2f618dd54ca8739b309ec4fc024de578b' (2024-11-13)
+• Removed input 'llm-agents/bun2nix/import-tree'
 • Updated input 'nixpkgs':
     'github:nixos/nixpkgs/dc704e6102e76aad573f63b74c742cd96f8f1e6c' (2025-10-02)
   → 'github:nixos/nixpkgs/2dad7af78a183b6c486702c18af8a9544f298377' (2025-10-09)
@@ -292,7 +305,7 @@ mod tests {
             .parse(remaining)
             .expect("Failed to parse entries");
 
-        assert_eq!(entries.len(), 7);
+        assert_eq!(entries.len(), 8);
 
         match &entries[0] {
             Entry::Updated(name, info) => {
@@ -326,6 +339,13 @@ mod tests {
                 assert_eq!(info.date, "2024-11-13");
             }
             _ => panic!("Expected Added entry with New"),
+        }
+
+        match &entries[4] {
+            Entry::Removed(name) => {
+                assert_eq!(*name, "llm-agents/bun2nix/import-tree");
+            }
+            _ => panic!("Expected Removed entry"),
         }
 
         match &entries.last().unwrap() {
