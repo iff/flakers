@@ -21,16 +21,20 @@
         overlays = [
           (import rust-overlay)
           (self: super: {
-            rustToolchain =
-              let
-                rust = super.rust-bin;
-              in
-              if builtins.pathExists ./rust-toolchain.toml then
-                rust.fromRustupToolchainFile ./rust-toolchain.toml
-              else if builtins.pathExists ./rust-toolchain then
-                rust.fromRustupToolchainFile ./rust-toolchain
-              else
-                rust.stable.latest.default;
+            rustToolchain = pkgs.symlinkJoin {
+              name = "rust-toolchain";
+              paths = [
+                (super.rust-bin.stable.latest.minimal.override {
+                  extensions = [
+                    "clippy"
+                    "rust-analyzer"
+                    "rust-docs"
+                    "rust-src"
+                  ];
+                })
+                (super.rust-bin.selectLatestNightlyWith (toolchain: toolchain.rustfmt))
+              ];
+            };
           })
         ];
 
@@ -45,7 +49,7 @@
             lockFile = ./Cargo.lock;
           };
 
-          nativeBuildInputs = [ pkgs.pkg-config ];
+          nativeBuildInputs = [ pkgs.rustToolchain ];
         };
 
       in
@@ -63,17 +67,9 @@
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
             rustToolchain
-            pkg-config
-            cargo-deny
             cargo-edit
-            cargo-watch
-            rust-analyzer
             pinact
           ];
-
-          shellHook = ''
-            ${pkgs.rustToolchain}/bin/cargo --version
-          '';
         };
       }
     );
