@@ -11,21 +11,7 @@ use nom::{
 enum FlakeRefType {
     Github,
     Gitlab,
-}
-
-impl<'a> TryFrom<&'a str> for FlakeRefType {
-    type Error = nom::Err<nom::error::Error<&'a str>>;
-
-    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
-        match value {
-            "github" => Ok(FlakeRefType::Github),
-            "gitlab" => Ok(FlakeRefType::Gitlab),
-            _ => Err(nom::Err::Error(nom::error::Error::new(
-                value,
-                nom::error::ErrorKind::Tag,
-            ))),
-        }
-    }
+    Tangled,
 }
 
 #[derive(Debug, PartialEq)]
@@ -36,42 +22,78 @@ struct FlakeRef<'a> {
 }
 
 impl<'a> FlakeRef<'a> {
-    /// Parse a flake ref from the input. Query parameters in the url are ignored.
     fn parse_from(input: &'a str) -> IResult<&'a str, Self> {
         let (input, ref_type_str) = take_until(":")(input)?;
         let (input, _) = char(':')(input)?;
-        let ref_type = ref_type_str.try_into()?;
 
-        let (input, repo_and_sha) =
-            verify(take_while1(|c: char| c != '?' && c != '\n'), |s: &str| {
-                s.matches('/').count() == 2
-            })
-            .parse(input)?;
-        let (input, _) = opt(|i| {
-            let (i, _) = char('?')(i)?;
-            not_line_ending(i)
-        })
-        .parse(input)?;
-
-        let parts: Vec<&str> = repo_and_sha.rsplitn(2, '/').collect();
-        #[allow(clippy::indexing_slicing)] // rsplitn gives us two parts
-        let repo = parts[1];
-        #[allow(clippy::indexing_slicing)] // rsplitn gives us two parts
-        let commit = parts[0];
-        Ok((
-            input,
-            FlakeRef {
-                ref_type,
-                repo,
-                commit,
-            },
-        ))
+        match ref_type_str {
+            "github" | "gitlab" => {
+                let ref_type = if ref_type_str == "github" {
+                    FlakeRefType::Github
+                } else {
+                    FlakeRefType::Gitlab
+                };
+                let (input, repo_and_sha) =
+                    verify(take_while1(|c: char| c != '?' && c != '\n'), |s: &str| {
+                        s.matches('/').count() == 2
+                    })
+                    .parse(input)?;
+                let (input, _) = opt(|i| {
+                    let (i, _) = char('?')(i)?;
+                    not_line_ending(i)
+                })
+                .parse(input)?;
+                let parts: Vec<&str> = repo_and_sha.rsplitn(2, '/').collect();
+                #[allow(clippy::indexing_slicing)] // rsplitn gives us two parts
+                let (commit, repo) = (parts[0], parts[1]);
+                Ok((
+                    input,
+                    FlakeRef {
+                        ref_type,
+                        repo,
+                        commit,
+                    },
+                ))
+            }
+            // TODO for now just parsese "tangled.org" and the rest will error
+            "git+https" => {
+                let (input, _) = tag("//tangled.org/@")(input)?;
+                let (input, path) = take_while1(|c: char| c != '?' && c != '\n').parse(input)?;
+                let (input, _) = char('?')(input)?;
+                let (input, query_str) = not_line_ending(input)?;
+                let params: Vec<&str> = query_str.split('&').collect();
+                let commit = params
+                    .iter()
+                    .find_map(|p| p.strip_prefix("rev="))
+                    // TODO fall back to ref?
+                    .or_else(|| params.iter().find_map(|p| p.strip_prefix("ref=")))
+                    .ok_or_else(|| {
+                        nom::Err::Error(nom::error::Error::new(
+                            query_str,
+                            nom::error::ErrorKind::Tag,
+                        ))
+                    })?;
+                Ok((
+                    input,
+                    FlakeRef {
+                        ref_type: FlakeRefType::Tangled,
+                        repo: path,
+                        commit,
+                    },
+                ))
+            }
+            _ => Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            ))),
+        }
     }
 
     fn repo_url(&self) -> String {
-        match self.ref_type {
+        match &self.ref_type {
             FlakeRefType::Github => format!("https://github.com/{}", self.repo),
             FlakeRefType::Gitlab => format!("https://gitlab.com/{}", self.repo),
+            FlakeRefType::Tangled => format!("https://tangled.org/@{}", self.repo),
         }
     }
 
@@ -244,6 +266,21 @@ mod tests {
     use nom::multi::many0;
 
     #[test]
+    fn test_parse_flake_ref_tangled() {
+        let input = "git+https://tangled.org/@tangled.org/core?ref=refs/heads/master&rev=9afe7ce0460ac5b13ad0079bddf35e92adbc5fcb";
+        let result = FlakeRef::parse_from(input).expect("parseable flake ref");
+
+        assert_eq!(
+            result.1,
+            FlakeRef {
+                ref_type: FlakeRefType::Tangled,
+                repo: "tangled.org/core",
+                commit: "9afe7ce0460ac5b13ad0079bddf35e92adbc5fcb",
+            }
+        );
+    }
+
+    #[test]
     fn test_parse_flake_ref() {
         let input = "github:nix-community/home-manager/bd92e8ee4a6031ca3dd836c91dc41c13fca1e533";
         let result = FlakeRef::parse_from(input).expect("parseable flake ref");
@@ -296,6 +333,9 @@ mod tests {
 • Updated input 'osh-oxy':
     'github:iff/osh-oxy/e79f39e33912abd5b18ca7f5f1e0d0744d4a09e6' (2025-10-02)
   → 'github:iff/osh-oxy/eed066ec93dba6a85b709a31f482ebcdc376ce88' (2025-10-10)
+• Updated input 'tangled':
+    'git+https://tangled.org/@tangled.org/core?ref=refs/heads/master&rev=9afe7ce0460ac5b13ad0079bddf35e92adbc5fcb' (2026-05-04)
+  → 'git+https://tangled.org/@tangled.org/core?ref=refs/heads/master&rev=11e11dde5087e8a86012a359b9a4a847197ea2f6' (2026-05-04)
 • Added input 'nihilistic-nvim/rustacean-nvim/gen-luarc/flake-parts':
     follows 'nihilistic-nvim/rustacean-nvim/flake-parts'
 "#;
@@ -305,7 +345,7 @@ mod tests {
             .parse(remaining)
             .expect("Failed to parse entries");
 
-        assert_eq!(entries.len(), 8);
+        assert_eq!(entries.len(), 9);
 
         match &entries[0] {
             Entry::Updated(name, info) => {
