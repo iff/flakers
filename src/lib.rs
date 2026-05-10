@@ -4,8 +4,58 @@ use nom::{
     bytes::complete::{tag, take_until, take_while1},
     character::complete::{char, line_ending, not_line_ending, space0, space1},
     combinator::{opt, verify},
+    error::{ContextError, ErrorKind, ParseError, context},
     sequence::delimited,
 };
+
+type IRes<'a, T> = IResult<&'a str, T, Error<'a>>;
+
+/// Error type that captures the input position and the innermost context label.
+#[derive(Debug)]
+pub struct Error<'a> {
+    pub input: &'a str,
+    pub context: Option<&'static str>,
+}
+
+impl<'a> ParseError<&'a str> for Error<'a> {
+    fn from_error_kind(input: &'a str, _kind: ErrorKind) -> Self {
+        Error {
+            input,
+            context: None,
+        }
+    }
+
+    fn append(_input: &'a str, _kind: ErrorKind, other: Self) -> Self {
+        other
+    }
+
+    fn or(self, other: Self) -> Self {
+        // keep the error that consumed more input (shorter remaining = more progress)
+        if self.input.len() <= other.input.len() {
+            self
+        } else {
+            other
+        }
+    }
+}
+
+impl<'a> ContextError<&'a str> for Error<'a> {
+    fn add_context(_input: &'a str, ctx: &'static str, other: Self) -> Self {
+        Error {
+            input: other.input,
+            context: Some(other.context.unwrap_or(ctx)),
+        }
+    }
+}
+
+impl<'a, E> nom::error::FromExternalError<&'a str, E> for Error<'a> {
+    fn from_external_error(input: &'a str, _kind: ErrorKind, _e: E) -> Self {
+        Error {
+            input,
+            context: None,
+        }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 enum FlakeRefType {
@@ -22,7 +72,7 @@ struct FlakeRef<'a> {
 }
 
 impl<'a> FlakeRef<'a> {
-    fn parse_from(input: &'a str) -> IResult<&'a str, Self> {
+    fn parse_from(input: &'a str) -> IRes<'a, Self> {
         let (input, ref_type_str) = take_until(":")(input)?;
         let (input, _) = char(':')(input)?;
 
@@ -33,11 +83,13 @@ impl<'a> FlakeRef<'a> {
                 } else {
                     FlakeRefType::Gitlab
                 };
-                let (input, repo_and_sha) =
+                let (input, repo_and_sha) = context(
+                    "expected owner/repo/sha",
                     verify(take_while1(|c: char| c != '?' && c != '\n'), |s: &str| {
                         s.matches('/').count() == 2
-                    })
-                    .parse(input)?;
+                    }),
+                )
+                .parse(input)?;
                 let (input, _) = opt(|i| {
                     let (i, _) = char('?')(i)?;
                     not_line_ending(i)
@@ -55,23 +107,23 @@ impl<'a> FlakeRef<'a> {
                     },
                 ))
             }
-            // TODO for now just parsese "tangled.org" and the rest will error
+            // TODO for now just parses "tangled.org" and the rest will error
             "git+https" => {
-                let (input, _) = tag("//tangled.org/@")(input)?;
+                let (input, _) =
+                    context("expected tangled.org host", tag("//tangled.org/@")).parse(input)?;
                 let (input, path) = take_while1(|c: char| c != '?' && c != '\n').parse(input)?;
                 let (input, _) = char('?')(input)?;
                 let (input, query_str) = not_line_ending(input)?;
                 let params: Vec<&str> = query_str.split('&').collect();
                 let commit = params
                     .iter()
-                    .find_map(|p| p.strip_prefix("rev="))
-                    // TODO fall back to ref?
-                    .or_else(|| params.iter().find_map(|p| p.strip_prefix("ref=")))
+                    .find_map(|p: &&str| p.strip_prefix("rev="))
+                    .or_else(|| params.iter().find_map(|p: &&str| p.strip_prefix("ref=")))
                     .ok_or_else(|| {
-                        nom::Err::Error(nom::error::Error::new(
-                            query_str,
-                            nom::error::ErrorKind::Tag,
-                        ))
+                        nom::Err::Error(Error {
+                            input: query_str,
+                            context: Some("expected rev= or ref= query param"),
+                        })
                     })?;
                 Ok((
                     input,
@@ -82,10 +134,12 @@ impl<'a> FlakeRef<'a> {
                     },
                 ))
             }
-            _ => Err(nom::Err::Error(nom::error::Error::new(
-                input,
-                nom::error::ErrorKind::Tag,
-            ))),
+            _ => Err(nom::Err::Error(Error {
+                input: ref_type_str,
+                context: Some(
+                    "unknown flake ref type: supports github, gitlab, git+https://tangled.org/@",
+                ),
+            })),
         }
     }
 
@@ -109,14 +163,22 @@ pub struct DatedFlakeRef<'a> {
 }
 
 impl<'a> DatedFlakeRef<'a> {
-    fn parse_from(input: &'a str) -> IResult<&'a str, Self> {
+    fn parse_from(input: &'a str) -> IRes<'a, Self> {
         let (input, _) = space0(input)?;
-        let (input, url) = delimited(tag("'"), take_until("'"), tag("'")).parse(input)?;
+        let (input, url) = context(
+            "expected flake url in single quotes",
+            delimited(tag("'"), take_until("'"), tag("'")),
+        )
+        .parse(input)?;
         let (input, _) = space1(input)?;
-        let (input, date) = delimited(tag("("), take_until(")"), tag(")")).parse(input)?;
+        let (input, date) = context(
+            "expected date in parentheses",
+            delimited(tag("("), take_until(")"), tag(")")),
+        )
+        .parse(input)?;
         let (input, _) = line_ending(input)?;
 
-        let (_, flake_ref) = FlakeRef::parse_from(url)?;
+        let (_, flake_ref) = context("flake ref url", FlakeRef::parse_from).parse(url)?;
 
         Ok((input, DatedFlakeRef { flake_ref, date }))
     }
@@ -129,11 +191,11 @@ pub struct UpdateInfo<'a> {
 }
 
 impl<'a> UpdateInfo<'a> {
-    fn parse_from(input: &'a str) -> IResult<&'a str, Self> {
-        let (input, from) = DatedFlakeRef::parse_from(input)?;
+    fn parse_from(input: &'a str) -> IRes<'a, Self> {
+        let (input, from) = context("'from' flake ref", DatedFlakeRef::parse_from).parse(input)?;
         let (input, _) = space0(input)?;
-        let (input, _) = tag("→")(input)?;
-        let (input, to) = DatedFlakeRef::parse_from(input)?;
+        let (input, _) = context("expected → arrow", tag("→")).parse(input)?;
+        let (input, to) = context("'to' flake ref", DatedFlakeRef::parse_from).parse(input)?;
 
         Ok((input, UpdateInfo { from, to }))
     }
@@ -162,7 +224,7 @@ pub enum AddInfo<'a> {
 }
 
 impl<'a> AddInfo<'a> {
-    fn parse_from(input: &'a str) -> IResult<&'a str, Self> {
+    fn parse_from(input: &'a str) -> IRes<'a, Self> {
         alt((
             |i| {
                 let (i, _) = space0(i)?;
@@ -191,11 +253,9 @@ impl<'a> Entry<'a> {
     pub fn summary(&self) -> String {
         match self {
             Entry::Updated(name, info) => {
-                let url = if let Some(url) = info.url() {
-                    url
-                } else {
-                    String::from("incompatible url")
-                };
+                let url = info
+                    .url()
+                    .unwrap_or_else(|| String::from("incompatible url"));
                 format!(
                     " - Updated input [`{name}`]({}): [`{}` ➡️ `{}`]({}) <sub>({} to {})<sub/>",
                     info.from.flake_ref.repo_url(),
@@ -205,7 +265,6 @@ impl<'a> Entry<'a> {
                     info.from.date,
                     info.to.date,
                 )
-                .to_string()
             }
             Entry::Added(info) => match info {
                 AddInfo::Follows(repo) => format!(" - Added input (follows `{}`)", repo),
@@ -216,21 +275,19 @@ impl<'a> Entry<'a> {
                     dated_ref.date
                 ),
             },
-            Entry::Removed(name) => {
-                format!(" - Removed input `{name}`")
-            }
+            Entry::Removed(name) => format!(" - Removed input `{name}`"),
         }
     }
 }
 
-pub fn parse_header(input: &str) -> IResult<&str, ()> {
+pub fn parse_header(input: &str) -> IRes<'_, ()> {
     let (input, _) = tag("Flake lock file updates:")(input)?;
     let (input, _) = line_ending(input)?;
     let (input, _) = line_ending(input)?;
     Ok((input, ()))
 }
 
-fn parse_updated(input: &str) -> IResult<&str, Entry<'_>> {
+fn parse_updated(input: &str) -> IRes<'_, Entry<'_>> {
     let (input, _) = tag("• Updated input '")(input)?;
     let (input, package) = take_until("':")(input)?;
     let (input, _) = tag("':")(input)?;
@@ -239,7 +296,7 @@ fn parse_updated(input: &str) -> IResult<&str, Entry<'_>> {
     Ok((input, Entry::Updated(package, info)))
 }
 
-fn parse_added(input: &str) -> IResult<&str, Entry<'_>> {
+fn parse_added(input: &str) -> IRes<'_, Entry<'_>> {
     let (input, _) = tag("• Added input '")(input)?;
     let (input, _) = take_until("':")(input)?;
     let (input, _) = tag("':")(input)?;
@@ -248,7 +305,7 @@ fn parse_added(input: &str) -> IResult<&str, Entry<'_>> {
     Ok((input, Entry::Added(info)))
 }
 
-fn parse_removed(input: &str) -> IResult<&str, Entry<'_>> {
+fn parse_removed(input: &str) -> IRes<'_, Entry<'_>> {
     let (input, _) = tag("• Removed input '")(input)?;
     let (input, package) = take_until("'")(input)?;
     let (input, _) = tag("'")(input)?;
@@ -256,7 +313,7 @@ fn parse_removed(input: &str) -> IResult<&str, Entry<'_>> {
     Ok((input, Entry::Removed(package)))
 }
 
-pub fn parse_entry(input: &str) -> IResult<&str, Entry<'_>> {
+pub fn parse_entry(input: &str) -> IRes<'_, Entry<'_>> {
     alt((parse_updated, parse_added, parse_removed)).parse(input)
 }
 
@@ -264,6 +321,32 @@ pub fn parse_entry(input: &str) -> IResult<&str, Entry<'_>> {
 mod tests {
     use super::*;
     use nom::multi::many0;
+
+    #[test]
+    fn test_parse_error_unknown_flake_ref() {
+        let input = "• Updated input 'foo':\n    'git://xyz.org/bar?rev=abc' (2025-01-01)\n  → 'git://xyz.org/bar?rev=def' (2025-01-02)\n";
+        match parse_entry(input) {
+            Err(nom::Err::Error(e)) => {
+                assert_eq!(
+                    e.context,
+                    Some(
+                        "unknown flake ref type: supports github, gitlab, git+https://tangled.org/@"
+                    )
+                );
+                assert_eq!(e.input, "git");
+            }
+            other => panic!("expected error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_error_tangled_wrong_host() {
+        let input = "• Updated input 'foo':\n    'git+https://tang.org/@foo/bar?rev=abc' (2025-01-01)\n  → 'git+https://tangled.org/@foo/bar?rev=def' (2025-01-02)\n";
+        match parse_entry(input) {
+            Err(nom::Err::Error(e)) => assert_eq!(e.context, Some("expected tangled.org host")),
+            other => panic!("expected error, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_parse_flake_ref_tangled() {

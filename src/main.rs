@@ -17,6 +17,18 @@ fn main() -> ExitCode {
 
     let remaining = match parse_header(&input) {
         Ok((remaining, _)) => remaining,
+        Err(nom::Err::Error(e) | nom::Err::Failure(e)) => {
+            println!("<details><summary>Parse errors</summary><p>");
+            println!("\n```");
+            println!(
+                "Failed to parse header ({}): `{}`",
+                e.context.unwrap_or("unknown"),
+                e.input.lines().next().unwrap_or("")
+            );
+            println!("```");
+            println!("\n</p></details>\n");
+            return ExitCode::FAILURE;
+        }
         Err(e) => {
             println!("<details><summary>Parse errors</summary><p>");
             println!("\n```");
@@ -40,7 +52,8 @@ fn main() -> ExitCode {
                 entries.push(entry);
                 current = rest;
             }
-            Err(_) => {
+            Err(nom::Err::Incomplete(_)) => break,
+            Err(nom::Err::Error(e) | nom::Err::Failure(e)) => {
                 let offset = current.as_ptr() as usize - input.as_ptr() as usize;
                 let line_num = input[..offset].lines().count() + 1;
                 let next = current
@@ -55,7 +68,12 @@ fn main() -> ExitCode {
                     Some(rest) => &current[..current.len() - rest.len()],
                     None => current,
                 };
-                errors.push(format!("line {line_num}:\n{}", bad_chunk.trim()));
+                let reason = e.context.unwrap_or("unknown");
+                let fail_line = e.input.lines().next().unwrap_or("");
+                errors.push(format!(
+                    "line {line_num} ({reason}): `{fail_line}`\n{}",
+                    bad_chunk.trim()
+                ));
                 match next {
                     Some(rest) => current = rest,
                     None => break,
