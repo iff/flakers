@@ -58,17 +58,17 @@ impl<'a, E> nom::error::FromExternalError<&'a str, E> for Error<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-enum FlakeRefType {
+pub enum FlakeRefType {
     Github,
     Gitlab,
     Tangled,
 }
 
 #[derive(Debug, PartialEq)]
-struct FlakeRef<'a> {
-    ref_type: FlakeRefType,
-    repo: &'a str,
-    commit: &'a str,
+pub struct FlakeRef<'a> {
+    pub ref_type: FlakeRefType,
+    pub repo: &'a str,
+    pub commit: &'a str,
 }
 
 impl<'a> FlakeRef<'a> {
@@ -143,7 +143,7 @@ impl<'a> FlakeRef<'a> {
         }
     }
 
-    fn repo_url(&self) -> String {
+    pub fn repo_url(&self) -> String {
         match &self.ref_type {
             FlakeRefType::Github => format!("https://github.com/{}", self.repo),
             FlakeRefType::Gitlab => format!("https://gitlab.com/{}", self.repo),
@@ -151,7 +151,7 @@ impl<'a> FlakeRef<'a> {
         }
     }
 
-    fn sha(&self) -> String {
+    pub fn sha(&self) -> String {
         self.commit[..8.min(self.commit.len())].to_string()
     }
 }
@@ -178,8 +178,8 @@ impl std::fmt::Display for Date<'_> {
 
 #[derive(Debug)]
 pub struct DatedFlakeRef<'a> {
-    flake_ref: FlakeRef<'a>,
-    date: Date<'a>,
+    pub flake_ref: FlakeRef<'a>,
+    pub date: Date<'a>,
 }
 
 impl<'a> DatedFlakeRef<'a> {
@@ -202,8 +202,8 @@ impl<'a> DatedFlakeRef<'a> {
 
 #[derive(Debug)]
 pub struct UpdateInfo<'a> {
-    from: DatedFlakeRef<'a>,
-    to: DatedFlakeRef<'a>,
+    pub from: DatedFlakeRef<'a>,
+    pub to: DatedFlakeRef<'a>,
 }
 
 impl<'a> UpdateInfo<'a> {
@@ -216,7 +216,7 @@ impl<'a> UpdateInfo<'a> {
         Ok((input, UpdateInfo { from, to }))
     }
 
-    fn url(&self) -> Option<String> {
+    pub fn url(&self) -> Option<String> {
         let from = &self.from.flake_ref;
         let to = &self.to.flake_ref;
 
@@ -269,34 +269,32 @@ pub enum Entry<'a> {
     Removed(&'a str),
 }
 
-impl<'a> Entry<'a> {
-    pub fn summary(&self) -> String {
-        match self {
-            Entry::Updated(name, info) => {
-                let url = info
-                    .url()
-                    .unwrap_or_else(|| String::from("incompatible url"));
-                format!(
-                    " - Updated input [`{name}`]({}): [`{}` ➡️ `{}`]({}) <sub>({} to {})<sub/>",
-                    info.from.flake_ref.repo_url(),
-                    info.from.flake_ref.sha(),
-                    info.to.flake_ref.sha(),
-                    url,
-                    info.from.date,
-                    info.to.date,
-                )
-            }
-            Entry::Added(info) => match info {
-                AddInfo::Follows(repo) => format!(" - Added input (follows `{}`)", repo),
-                AddInfo::New(dated_ref) => format!(
-                    " - Added input [`{}`]({}) ({})",
-                    dated_ref.flake_ref.sha(),
-                    dated_ref.flake_ref.repo_url(),
-                    dated_ref.date
-                ),
-            },
-            Entry::Removed(name) => format!(" - Removed input `{name}`"),
+pub fn render_entry(entry: &Entry) -> String {
+    match entry {
+        Entry::Updated(name, info) => {
+            let url = info
+                .url()
+                .unwrap_or_else(|| String::from("incompatible url"));
+            format!(
+                " - Updated input [`{name}`]({}): [`{}` ➡️ `{}`]({}) <sub>({} to {})<sub/>",
+                info.from.flake_ref.repo_url(),
+                info.from.flake_ref.sha(),
+                info.to.flake_ref.sha(),
+                url,
+                info.from.date,
+                info.to.date,
+            )
         }
+        Entry::Added(info) => match info {
+            AddInfo::Follows(repo) => format!(" - Added input (follows `{}`)", repo),
+            AddInfo::New(dated_ref) => format!(
+                " - Added input [`{}`]({}) ({})",
+                dated_ref.flake_ref.sha(),
+                dated_ref.flake_ref.repo_url(),
+                dated_ref.date
+            ),
+        },
+        Entry::Removed(name) => format!(" - Removed input `{name}`"),
     }
 }
 

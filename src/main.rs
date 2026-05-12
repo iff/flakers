@@ -1,4 +1,4 @@
-use flakers::{Entry, parse_commit_message};
+use flakers::{Entry, parse_commit_message, render_entry};
 use std::io::{self, Read};
 use std::process::ExitCode;
 
@@ -51,12 +51,12 @@ fn main() -> ExitCode {
         .entries
         .iter()
         .filter(|e| matches!(e, Entry::Added(_)))
-        .for_each(|e| println!("{}", e.summary()));
+        .for_each(|e| println!("{}", render_entry(e)));
     result
         .entries
         .iter()
         .filter(|e| matches!(e, Entry::Updated(_, _)))
-        .for_each(|e| println!("{}", e.summary()));
+        .for_each(|e| println!("{}", render_entry(e)));
 
     if result.failures.is_empty() {
         ExitCode::SUCCESS
