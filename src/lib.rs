@@ -373,34 +373,32 @@ fn parse_header(input: &str) -> IRes<'_, ()> {
     Ok((input, ()))
 }
 
-fn parse_updated(input: &str) -> IRes<'_, Entry<'_>> {
-    let (input, _) = tag("• Updated input '")(input)?;
-    let (input, package) = take_until("':")(input)?;
-    let (input, _) = tag("':")(input)?;
-    let (input, _) = line_ending(input)?;
-    let (input, info) = UpdateInfo::parse_from.parse(input)?;
-    Ok((input, Entry::Updated(package, info)))
-}
-
-fn parse_added(input: &str) -> IRes<'_, Entry<'_>> {
-    let (input, _) = tag("• Added input '")(input)?;
-    let (input, _) = take_until("':")(input)?;
-    let (input, _) = tag("':")(input)?;
-    let (input, _) = line_ending(input)?;
-    let (input, info) = AddInfo::parse_from.parse(input)?;
-    Ok((input, Entry::Added(info)))
-}
-
-fn parse_removed(input: &str) -> IRes<'_, Entry<'_>> {
-    let (input, _) = tag("• Removed input '")(input)?;
-    let (input, package) = take_until("'")(input)?;
-    let (input, _) = tag("'")(input)?;
-    let (input, _) = line_ending(input)?;
-    Ok((input, Entry::Removed(package)))
-}
-
 fn parse_entry(input: &str) -> IRes<'_, Entry<'_>> {
-    alt((parse_updated, parse_added, parse_removed)).parse(input)
+    let (input, _) = tag("• ")(input)?;
+    let (input, verb) = alt((tag("Updated"), tag("Added"), tag("Removed"))).parse(input)?;
+    let (input, _) = tag(" input '")(input)?;
+    let (input, name) = take_until("'")(input)?;
+    let (input, _) = char('\'')(input)?;
+
+    match verb {
+        "Updated" => {
+            let (input, _) = tag(":")(input)?;
+            let (input, _) = line_ending(input)?;
+            let (input, info) = UpdateInfo::parse_from.parse(input)?;
+            Ok((input, Entry::Updated(name, info)))
+        }
+        "Added" => {
+            let (input, _) = tag(":")(input)?;
+            let (input, _) = line_ending(input)?;
+            let (input, info) = AddInfo::parse_from.parse(input)?;
+            Ok((input, Entry::Added(info)))
+        }
+        "Removed" => {
+            let (input, _) = line_ending(input)?;
+            Ok((input, Entry::Removed(name)))
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[cfg(test)]
