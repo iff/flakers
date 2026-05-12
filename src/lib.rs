@@ -298,6 +298,7 @@ pub fn render_entry(entry: &Entry) -> String {
     }
 }
 
+#[derive(Debug)]
 pub struct ParseFailure<'a> {
     pub line_num: usize,
     pub context: Option<&'static str>,
@@ -305,6 +306,7 @@ pub struct ParseFailure<'a> {
     pub bad_chunk: &'a str,
 }
 
+#[derive(Debug)]
 pub struct ParseResult<'a> {
     pub entries: Vec<Entry<'a>>,
     pub failures: Vec<ParseFailure<'a>>,
@@ -556,6 +558,158 @@ mod tests {
                 assert_eq!(*repo, "nihilistic-nvim/rustacean-nvim/flake-parts");
             }
             _ => panic!("Expected Added entry with Follows"),
+        }
+    }
+
+    #[test]
+    fn test_parse_commit_message_header_failure() {
+        let input = "Not a flake lock file\n\n• Updated input 'foo':\n";
+        let err = parse_commit_message(input).expect_err("expected header parse failure");
+        assert_eq!(
+            err.input,
+            "Not a flake lock file\n\n• Updated input 'foo':\n"
+        );
+    }
+
+    #[test]
+    fn test_parse_commit_message_partial_failure() {
+        let input = "Flake lock file updates:\n\n• Updated input 'foo':\n    'git://xyz.org/bar?rev=abc' (2025-01-01)\n  → 'git://xyz.org/bar?rev=def' (2025-01-02)\n• Removed input 'bar'\n";
+
+        let result = parse_commit_message(input).expect("should parse despite entry error");
+
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.failures.len(), 1);
+
+        match &result.entries[0] {
+            Entry::Removed(name) => assert_eq!(*name, "bar"),
+            _ => panic!("expected Removed entry"),
+        }
+
+        let failure = &result.failures[0];
+        assert_eq!(failure.line_num, 3);
+        assert_eq!(
+            failure.context,
+            Some("unknown flake ref type: supports github, gitlab, git+https://tangled.org/@")
+        );
+        assert_eq!(failure.fail_line, "git");
+        assert_eq!(
+            failure.bad_chunk,
+            "• Updated input 'foo':\n    'git://xyz.org/bar?rev=abc' (2025-01-01)\n  → 'git://xyz.org/bar?rev=def' (2025-01-02)"
+        );
+    }
+
+    #[test]
+    fn test_parse_commit_message_all_failures() {
+        let input = "Flake lock file updates:\n\n• Updated input 'foo':\n    'git://xyz.org/bar?rev=abc' (2025-01-01)\n  → 'git://xyz.org/bar?rev=def' (2025-01-02)\n";
+
+        let result = parse_commit_message(input).expect("should return Ok with failures");
+        assert!(result.entries.is_empty());
+        assert_eq!(result.failures.len(), 1);
+    }
+
+    #[test]
+    fn test_render_entry_updated_same_repo() {
+        let sha_a = "a".repeat(40);
+        let sha_b = "b".repeat(40);
+        let input = format!(
+            "• Updated input 'nixpkgs':\n    'github:nixos/nixpkgs/{sha_a}' (2025-01-01)\n  → 'github:nixos/nixpkgs/{sha_b}' (2025-01-02)\n"
+        );
+        let (_, entry) = parse_entry(&input).expect("valid entry");
+        assert_eq!(
+            render_entry(&entry),
+            format!(
+                " - Updated input [`nixpkgs`](https://github.com/nixos/nixpkgs): \
+                [`aaaaaaaa` ➡️ `bbbbbbbb`](https://github.com/nixos/nixpkgs/compare/{sha_a}...{sha_b}) \
+                <sub>(2025-01-01 to 2025-01-02)<sub/>"
+            )
+        );
+    }
+
+    #[test]
+    fn test_render_entry_updated_cross_repo() {
+        let sha_a = "a".repeat(40);
+        let sha_b = "b".repeat(40);
+        let input = format!(
+            "• Updated input 'foo':\n    'github:owner/repo-a/{sha_a}' (2025-01-01)\n  → 'github:owner/repo-b/{sha_b}' (2025-01-02)\n"
+        );
+        let (_, entry) = parse_entry(&input).expect("valid entry");
+        assert!(render_entry(&entry).contains("incompatible url"));
+    }
+
+    #[test]
+    fn test_render_entry_added_new() {
+        let sha = "a".repeat(40);
+        let input = format!(
+            "• Added input 'flake-utils':\n    'github:numtide/flake-utils/{sha}' (2025-01-01)\n"
+        );
+        let (_, entry) = parse_entry(&input).expect("valid entry");
+        assert_eq!(
+            render_entry(&entry),
+            " - Added input [`aaaaaaaa`](https://github.com/numtide/flake-utils) (2025-01-01)"
+        );
+    }
+
+    #[test]
+    fn test_render_entry_added_follows() {
+        let input = "• Added input 'foo/flake-parts':\n    follows 'foo/flake-utils'\n";
+        let (_, entry) = parse_entry(input).expect("valid entry");
+        assert_eq!(
+            render_entry(&entry),
+            " - Added input (follows `foo/flake-utils`)"
+        );
+    }
+
+    #[test]
+    fn test_render_entry_removed() {
+        let input = "• Removed input 'old-dep'\n";
+        let (_, entry) = parse_entry(input).expect("valid entry");
+        assert_eq!(render_entry(&entry), " - Removed input `old-dep`");
+    }
+
+    #[test]
+    fn test_update_info_url_same_repo() {
+        let sha_a = "a".repeat(40);
+        let sha_b = "b".repeat(40);
+        let input = format!(
+            "• Updated input 'foo':\n    'github:owner/repo/{sha_a}' (2025-01-01)\n  → 'github:owner/repo/{sha_b}' (2025-01-02)\n"
+        );
+        let (_, entry) = parse_entry(&input).expect("valid entry");
+        match entry {
+            Entry::Updated(_, info) => assert_eq!(
+                info.url(),
+                Some(format!(
+                    "https://github.com/owner/repo/compare/{sha_a}...{sha_b}"
+                ))
+            ),
+            _ => panic!("expected Updated"),
+        }
+    }
+
+    #[test]
+    fn test_update_info_url_different_repo() {
+        let sha_a = "a".repeat(40);
+        let sha_b = "b".repeat(40);
+        let input = format!(
+            "• Updated input 'foo':\n    'github:owner/repo-a/{sha_a}' (2025-01-01)\n  → 'github:owner/repo-b/{sha_b}' (2025-01-02)\n"
+        );
+        let (_, entry) = parse_entry(&input).expect("valid entry");
+        match entry {
+            Entry::Updated(_, info) => assert_eq!(info.url(), None),
+            _ => panic!("expected Updated"),
+        }
+    }
+
+    #[test]
+    fn test_update_info_url_different_ref_type() {
+        let sha_a = "a".repeat(40);
+        let sha_b = "b".repeat(40);
+        let input = format!(
+            "• Updated input 'foo':\n    'github:owner/repo/{sha_a}' (2025-01-01)\n  → 'gitlab:owner/repo/{sha_b}' (2025-01-02)\n"
+        );
+        let (_, entry) = parse_entry(&input).expect("valid entry");
+        match entry {
+            Entry::Updated(_, info) => assert_eq!(info.url(), None),
+            _ => panic!("expected Updated"),
         }
     }
 }
