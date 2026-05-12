@@ -156,10 +156,30 @@ impl<'a> FlakeRef<'a> {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub struct Date<'a>(&'a str);
+
+impl<'a> Date<'a> {
+    fn parse_from(input: &'a str) -> IRes<'a, Self> {
+        context(
+            "expected date in parentheses",
+            delimited(tag("("), take_until(")"), tag(")")),
+        )
+        .map(Date)
+        .parse(input)
+    }
+}
+
+impl std::fmt::Display for Date<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
 #[derive(Debug)]
 pub struct DatedFlakeRef<'a> {
     flake_ref: FlakeRef<'a>,
-    date: &'a str,
+    date: Date<'a>,
 }
 
 impl<'a> DatedFlakeRef<'a> {
@@ -171,11 +191,7 @@ impl<'a> DatedFlakeRef<'a> {
         )
         .parse(input)?;
         let (input, _) = space1(input)?;
-        let (input, date) = context(
-            "expected date in parentheses",
-            delimited(tag("("), take_until(")"), tag(")")),
-        )
-        .parse(input)?;
+        let (input, date) = Date::parse_from(input)?;
         let (input, _) = line_ending(input)?;
 
         let (_, flake_ref) = context("flake ref url", FlakeRef::parse_from).parse(url)?;
@@ -194,7 +210,7 @@ impl<'a> UpdateInfo<'a> {
     fn parse_from(input: &'a str) -> IRes<'a, Self> {
         let (input, from) = context("'from' flake ref", DatedFlakeRef::parse_from).parse(input)?;
         let (input, _) = space0(input)?;
-        let (input, _) = context("expected → arrow", tag("→")).parse(input)?;
+        let (input, _) = context("expected arrow", tag("→")).parse(input)?;
         let (input, to) = context("'to' flake ref", DatedFlakeRef::parse_from).parse(input)?;
 
         Ok((input, UpdateInfo { from, to }))
@@ -229,7 +245,11 @@ impl<'a> AddInfo<'a> {
             |i| {
                 let (i, _) = space0(i)?;
                 let (i, _) = tag("follows ")(i)?;
-                let (i, repo) = delimited(tag("'"), take_until("'"), tag("'")).parse(i)?;
+                let (i, repo) = context(
+                    "expected repo in single quotes",
+                    delimited(tag("'"), take_until("'"), tag("'")),
+                )
+                .parse(i)?;
                 let (i, _) = line_ending(i)?;
                 Ok((i, AddInfo::Follows(repo)))
             },
@@ -280,7 +300,73 @@ impl<'a> Entry<'a> {
     }
 }
 
-pub fn parse_header(input: &str) -> IRes<'_, ()> {
+pub struct ParseFailure<'a> {
+    pub line_num: usize,
+    pub context: Option<&'static str>,
+    pub fail_line: &'a str,
+    pub bad_chunk: &'a str,
+}
+
+pub struct ParseResult<'a> {
+    pub entries: Vec<Entry<'a>>,
+    pub failures: Vec<ParseFailure<'a>>,
+}
+
+pub fn parse_commit_message(input: &str) -> Result<ParseResult<'_>, Error<'_>> {
+    let (mut current, _) = parse_header(input).map_err(|e| match e {
+        nom::Err::Error(e) | nom::Err::Failure(e) => e,
+        nom::Err::Incomplete(_) => Error {
+            input,
+            context: Some("incomplete input"),
+        },
+    })?;
+
+    let mut entries = Vec::new();
+    let mut failures = Vec::new();
+
+    loop {
+        if current.trim().is_empty() {
+            break;
+        }
+        match parse_entry(current) {
+            Ok((rest, entry)) => {
+                entries.push(entry);
+                current = rest;
+            }
+            Err(nom::Err::Incomplete(_)) => break,
+            Err(nom::Err::Error(e) | nom::Err::Failure(e)) => {
+                let offset = current.as_ptr() as usize - input.as_ptr() as usize;
+                let line_num = input[..offset].lines().count() + 1;
+                let next = current
+                    .split_inclusive('\n')
+                    .skip(1)
+                    .find(|line| line.starts_with('•'))
+                    .map(|line| {
+                        let line_offset = line.as_ptr() as usize - current.as_ptr() as usize;
+                        &current[line_offset..]
+                    });
+                let bad_chunk = match next {
+                    Some(rest) => &current[..current.len() - rest.len()],
+                    None => current,
+                };
+                failures.push(ParseFailure {
+                    line_num,
+                    context: e.context,
+                    fail_line: e.input.lines().next().unwrap_or(""),
+                    bad_chunk: bad_chunk.trim(),
+                });
+                match next {
+                    Some(rest) => current = rest,
+                    None => break,
+                }
+            }
+        }
+    }
+
+    Ok(ParseResult { entries, failures })
+}
+
+fn parse_header(input: &str) -> IRes<'_, ()> {
     let (input, _) = tag("Flake lock file updates:")(input)?;
     let (input, _) = line_ending(input)?;
     let (input, _) = line_ending(input)?;
@@ -313,14 +399,13 @@ fn parse_removed(input: &str) -> IRes<'_, Entry<'_>> {
     Ok((input, Entry::Removed(package)))
 }
 
-pub fn parse_entry(input: &str) -> IRes<'_, Entry<'_>> {
+fn parse_entry(input: &str) -> IRes<'_, Entry<'_>> {
     alt((parse_updated, parse_added, parse_removed)).parse(input)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nom::multi::many0;
 
     #[test]
     fn test_parse_error_unknown_flake_ref() {
@@ -423,10 +508,9 @@ mod tests {
     follows 'nihilistic-nvim/rustacean-nvim/flake-parts'
 "#;
 
-        let remaining = parse_header(input).expect("Failed to parse header").0;
-        let (_, entries) = many0(parse_entry)
-            .parse(remaining)
-            .expect("Failed to parse entries");
+        let result = parse_commit_message(input).expect("Failed to parse commit message");
+        assert!(result.failures.is_empty());
+        let entries = result.entries;
 
         assert_eq!(entries.len(), 9);
 
@@ -439,14 +523,14 @@ mod tests {
                     info.from.flake_ref.commit,
                     "bd92e8ee4a6031ca3dd836c91dc41c13fca1e533"
                 );
-                assert_eq!(info.from.date, "2025-10-03");
+                assert_eq!(info.from.date, Date("2025-10-03"));
                 assert_eq!(info.to.flake_ref.ref_type, FlakeRefType::Github);
                 assert_eq!(info.to.flake_ref.repo, "nix-community/home-manager");
                 assert_eq!(
                     info.to.flake_ref.commit,
                     "bcccb01d0a353c028cc8cb3254cac7ebae32929e"
                 );
-                assert_eq!(info.to.date, "2025-10-10");
+                assert_eq!(info.to.date, Date("2025-10-10"));
             }
             _ => panic!("Expected Updated entry"),
         }
@@ -459,7 +543,7 @@ mod tests {
                     info.flake_ref.commit,
                     "11707dc2f618dd54ca8739b309ec4fc024de578b"
                 );
-                assert_eq!(info.date, "2024-11-13");
+                assert_eq!(info.date, Date("2024-11-13"));
             }
             _ => panic!("Expected Added entry with New"),
         }
