@@ -10,6 +10,20 @@ use nom::{
 
 type IRes<'a, T> = IResult<&'a str, T, Error<'a>>;
 
+#[derive(Debug)]
+pub struct ParseFailure<'a> {
+    pub line_num: usize,
+    pub context: Option<&'static str>,
+    pub fail_line: &'a str,
+    pub bad_chunk: &'a str,
+}
+
+#[derive(Debug)]
+pub struct ParseResult<'a> {
+    pub entries: Vec<Entry<'a>>,
+    pub failures: Vec<ParseFailure<'a>>,
+}
+
 /// Error type that captures the input position and the innermost context label.
 #[derive(Debug)]
 pub struct Error<'a> {
@@ -296,20 +310,6 @@ pub fn render_entry(entry: &Entry) -> String {
         },
         Entry::Removed(name) => format!(" - Removed input `{name}`"),
     }
-}
-
-#[derive(Debug)]
-pub struct ParseFailure<'a> {
-    pub line_num: usize,
-    pub context: Option<&'static str>,
-    pub fail_line: &'a str,
-    pub bad_chunk: &'a str,
-}
-
-#[derive(Debug)]
-pub struct ParseResult<'a> {
-    pub entries: Vec<Entry<'a>>,
-    pub failures: Vec<ParseFailure<'a>>,
 }
 
 pub fn parse_commit_message(input: &str) -> Result<ParseResult<'_>, Error<'_>> {
