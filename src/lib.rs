@@ -133,7 +133,7 @@ impl<'a> FlakeRef<'a> {
                     .iter()
                     .find_map(|p: &&str| p.strip_prefix("rev="))
                     .or_else(|| params.iter().find_map(|p: &&str| p.strip_prefix("ref=")))
-                    .ok_or_else(|| {
+                    .ok_or({
                         nom::Err::Error(Error {
                             input: query_str,
                             context: Some("expected rev= or ref= query param"),
